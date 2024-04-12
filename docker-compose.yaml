@@ -1,0 +1,88 @@
+networks:
+  app-tier:
+    driver: bridge
+
+services:
+  # modelserver:
+  #   image: niits/tritonserver:r24.03-diffusion
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ["0"]
+  #             capabilities: [gpu]
+  #   volumes:
+  #     - ./models:/mnt/models
+  #   command:
+  #     [
+  #       "tritonserver",
+  #       "--model-repository=/mnt/models",
+  #       "--disable-auto-complete-config",
+  #       "--model-control-mode=none",
+  #     ]
+
+  api:
+    build:
+      context: ./api
+    volumes:
+      - ./api/app:/app
+    environment:
+      - TASK_NAME=${CELERY_TASK:-tasks.something}
+      - AMQP_DSN=amqp://${RABBITMQ_USER:-user}:${RABBITMQ_PASSWORD:-password}@rabbitmq:5672//
+      - QUEUE_NAME=${CELERY_TASK:-tasks}
+      - REDIS_DSN=redis://redis:6379/0
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "3000",
+        "--reload"
+      ]
+    ports:
+      - "3000:3000"
+    networks:
+      - app-tier
+
+  worker:
+    build: ./worker
+    environment:
+      - TASK_NAME=${CELERY_TASK:-tasks.something}
+      - AMQP_DSN=amqp://${RABBITMQ_USER:-user}:${RABBITMQ_PASSWORD:-password}@rabbitmq:5672//
+      - QUEUE_NAME=${CELERY_TASK:-tasks}
+      - REDIS_DSN=redis://redis:6379/0
+    depends_on:
+      - rabbitmq
+    networks:
+      - app-tier
+
+  rabbitmq:
+    image: rabbitmq
+    environment:
+      - RABBITMQ_PID_FILE=${RABBITMQ_PID_FILE:-/var/lib/rabbitmq/mnesia/rabbitmq}
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-user}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-password}
+    ports:
+      - 15672:15672
+    networks:
+      - app-tier
+  redis:
+    image: redis
+    ports:
+      - 6379:6379
+    networks:
+      - app-tier
+  flower:
+    image: mher/flower
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-user}:${RABBITMQ_PASSWORD:-password}@rabbitmq:5672//
+      - FLOWER_PORT=5555
+    ports:
+      - 5555:5555
+    depends_on:
+      - worker
+    networks:
+      - app-tier
